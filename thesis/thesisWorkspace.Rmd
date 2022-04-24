@@ -1,0 +1,361 @@
+---
+title: "thesisWorkspace"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(knitr)
+library(readr)
+library(party)
+library(modelr)
+library(xgboost)
+```
+
+
+```{r}
+df <- read_csv("./data/combined-pre.csv") %>% select(Div, Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR, HTHG, HTAG, HTR, HS, AS, HST, AST, HF, AF, HY, AY, HR, AR, B365H, B365D, B365A)
+
+# need to bring in 2019-2020, 2020-2021, and 2021-2022 data in sperately bc they did not combine correctly
+
+df1 <- read_csv("./data/2019-2020.csv") %>% select(Div, Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR, HTHG, HTAG, HTR, HS, AS, HST, AST, HF, AF, HY, AY, HR, AR, B365H, B365D, B365A)
+
+df2 <- read_csv("./data/2020-2021.csv") %>% select(Div, Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR, HTHG, HTAG, HTR, HS, AS, HST, AST, HF, AF, HY, AY, HR, AR, B365H, B365D, B365A)
+
+df3 <- read_csv("./data/2021-2022.csv") %>% select(Div, Date, HomeTeam, AwayTeam, FTHG, FTAG, FTR, HTHG, HTAG, HTR, HS, AS, HST, AST, HF, AF, HY, AY, HR, AR, B365H, B365D, B365A)
+
+# La Liga match ups from the 2008-2009 season up until the 2021-2022 season
+df <- rbind(df, df1, df2, df3)
+```
+
+## La Liga data
+```{r}
+# 08/09 season to 21/22 
+classico <- df %>% filter(HomeTeam=="Real Madrid" & AwayTeam=="Barcelona" | AwayTeam=="Real Madrid" & HomeTeam=="Barcelona")
+
+w <- df %>% filter(HomeTeam=="Celta") %>% select(-Date, -Div, -FTHG, -FTAG)
+w
+
+w_f <- df %>% filter(HomeTeam=="Celta") %>% select(-Date, -Div, -FTHG, -FTAG, -AwayTeam, -HomeTeam)
+w_f
+
+write_csv(classico, "./data/classico.csv")
+
+classico_new <- read_csv("./data/Copy_of_classico.csv")
+classico_for_xgb <- classico_new %>% select(-Date, -Div, -FTHG, -FTAG, -HomeTeam, -AwayTeam)
+classico_no_chars <- classico_new %>% select(-Date, -Div, -FTHG, -FTAG)
+```
+
+```{r}
+xrf <- classico_new %>% mutate(HalfTimeGoals = HTHG - HTAG,
+                                            ShotCount = HS - AS,
+                                            ShotsTargetCount = HST - AST,
+                                            FoulsCommited = HF - AF,
+                                            YellowCount = HY - AY,
+                                            RedCount = HR - AR,
+                                            Rank = `H-Rank` - `A-Rank`,
+                                            CoachTenure = `HC. Tenure` - `AC. Tenure`,
+                                            CoachAge = `HC. Age` - `AC. Age`
+                                            ) %>% select(-Div, -Date, -FTHG, -FTAG, -HTHG, -HTAG, -HS, -AS, -HST, -AST, -HF, -AF, -HY, -AY, -HR, -AR, -`H-Rank`, -`A-Rank`, -`HC. Tenure`, -`AC. Tenure`, -`HC. Age`, -`AC. Age`, -HomeTeam, -AwayTeam)
+xrf
+
+yxgb <- xrf
+```
+
+```{r}
+w_f[,] <- lapply(w_f[,], as.factor)
+#dim(classico_new)
+#dim(w)
+classico_no_chars[,] <- lapply(classico_no_chars[,], as.factor)
+xrf[,] <- lapply(xrf[,], as.factor)
+```
+
+
+
+
+```{r}
+# NORMAL DATA
+
+set.seed(2) #seed for reproducibility
+index <- round(nrow(classico_no_chars) * 0.25, digits=0)
+test_indices <- sample(1:nrow(classico_no_chars), index)
+train_set <- classico_no_chars[-test_indices,] #80% training set
+test_set <- classico_no_chars[test_indices,]  #20% test set
+
+set.seed(2)
+index_xgb <- round(nrow(classico_for_xgb) * 0.25, digits=0)
+test_indices_xgb <- sample(1:nrow(classico_for_xgb), index_xgb)
+train_set_xgb <- classico_for_xgb[-test_indices_xgb,] #80% training set
+test_set_xgb <- classico_for_xgb[test_indices_xgb,]  #20% test set
+
+# CELTA 
+
+set.seed(24) #seed for reproducibility
+indexW <- round(nrow(w_f) * 0.25, digits=0)
+test_indicesW <- sample(1:nrow(w_f), indexW)
+train_setW <- w_f[-test_indicesW,] #80% training set
+test_setW <- w_f[test_indicesW,]  #20% test set
+
+set.seed(24)
+index_xgbW <- round(nrow(w) * 0.25, digits=0)
+test_indices_xgbW <- sample(1:nrow(w), index_xgbW)
+train_set_xgbW <- w[-test_indices_xgbW,] #80% training set
+test_set_xgbW <- w[test_indices_xgbW,]  #20% test set
+
+# CHANGED VARIABLES (NORMAL DATA)
+
+set.seed(12) #seed for reproducibility
+xrf_index <- round(nrow(xrf) * 0.25, digits=0)
+xrf_test_indices <- sample(1:nrow(xrf), xrf_index)
+xrf_train_set <- xrf[-xrf_test_indices,] #80% training set
+xrf_test_set <- xrf[xrf_test_indices,]  #20% test set
+
+set.seed(12) #seed for reproducibility
+yxgb_index <- round(nrow(yxgb) * 0.25, digits=0)
+yxgb_test_indices <- sample(1:nrow(yxgb), yxgb_index)
+yxgb_train_set <- yxgb[-yxgb_test_indices,] #80% training set
+yxgb_test_set <- yxgb[yxgb_test_indices,]  #20% test set
+```
+
+```{r}
+set.seed(123)
+cforest_model <- cforest(FTR~., 
+                         data = xrf_train_set,
+                         control = cforest_control(ntree=200, 
+                                                   mtry=5
+                                                   #minsplit = 6,
+                                                   #minbucket = 2
+                                                   )
+                         )
+cforest_model
+set.seed(1)
+x <- varimp(cforest_model, conditional = F) %>% sort(decreasing = T)
+data.frame(x)
+```
+
+```{r}
+#train_set$FTR
+#test_set$FTR
+```
+
+```{r}
+#predict(cforest_model, newdata=train_set)
+#predict(cforest_model, newdata=test_set)
+#predict(cforest_model, newdata=test_set, type="prob")
+```
+
+```{r}
+#library(vip)
+#set.seed(1)
+#vip(cforest_model, num_features = 30)
+```
+
+```{r}
+set.seed(1)
+rf_pred_test <- predict(cforest_model, newdata=xrf_test_set)
+rf_pred_test_probs <- predict(cforest_model, newdata=xrf_test_set, type="prob")
+rf_pred_test_list <- as.data.frame(rf_pred_test)
+rf_pred_test_list
+```
+
+```{r}
+# accuracy measures for cforest
+rf_test_accuracy <- xrf_test_set %>% mutate(rf_pred_test = rf_pred_test)
+rf_test_accuracy<- rf_test_accuracy %>% mutate(correct = ifelse(rf_pred_test == FTR,1,0))
+rf_accuracy <- sum(rf_test_accuracy$correct) / length(rf_test_accuracy$correct)
+#rf_accuracy
+```
+
+
+```{r}
+#test_set
+```
+
+
+```{r}
+yxgb_test_set["HTR"][yxgb_test_set["HTR"] == "H"] <- "1"
+yxgb_test_set["HTR"][yxgb_test_set["HTR"] == "D"] <- "2"
+yxgb_test_set["HTR"][yxgb_test_set["HTR"] == "A"] <- "3"
+
+yxgb_test_set["FTR"][yxgb_test_set["FTR"] == "H"] <- "1"
+yxgb_test_set["FTR"][yxgb_test_set["FTR"] == "D"] <- "2"
+yxgb_test_set["FTR"][yxgb_test_set["FTR"] == "A"] <- "3"
+
+test_set_xgb_noName <- yxgb_test_set #%>% select(-HomeTeam, -AwayTeam)
+
+test_set_xgb_noName[,] <- lapply(test_set_xgb_noName[,], as.numeric)
+
+test_set_xgb_noName_noFTR <- test_set_xgb_noName %>% select(-FTR)
+
+
+yxgb_train_set["HTR"][yxgb_train_set["HTR"] == "H"] <- "1"
+yxgb_train_set["HTR"][yxgb_train_set["HTR"] == "D"] <- "2"
+yxgb_train_set["HTR"][yxgb_train_set["HTR"] == "A"] <- "3"
+
+yxgb_train_set["FTR"][yxgb_train_set["FTR"] == "H"] <- "1"
+yxgb_train_set["FTR"][yxgb_train_set["FTR"] == "D"] <- "2"
+yxgb_train_set["FTR"][yxgb_train_set["FTR"] == "A"] <- "3"
+
+train_set_xgb_noName <- yxgb_train_set #%>% select(-HomeTeam, -AwayTeam)
+
+train_set_xgb_noName[,] <- lapply(train_set_xgb_noName[,], as.numeric)
+
+train_set_xgb_noName_noFTR <- train_set_xgb_noName %>% select(-FTR)
+
+train_set_xgb_noName_noFTR
+
+# as.matrix(train_set_xgb_noName_noFTR)
+```
+
+Gradient boosting iterates over errors from several "weak" classifying algorithms. These weak classifiers are
+called so because they are not exceptionally accurate alone. However, gradient boosting builds a model by evaluating the errors each weak classifier makes. By iterating over these errors, the weak learners contribute to the creation of a stronger model, which culminates in our XGBoost model.
+
+```{r}
+set.seed(123)
+xg_train <- xgboost(as.matrix(train_set_xgb_noName_noFTR), 
+                    train_set_xgb_noName$FTR, 
+                    nthread = 2, 
+                    nrounds = 15,                               
+                    subsample = 0.5,
+                    objective = "multi:softmax",
+                    num_class = 4)
+```
+
+```{r}
+importance <- xgb.importance(model = xg_train) 
+importance
+importance %>% ggplot() + geom_bar(mapping  = aes(x= importance$Feature, y = importance$Gain), stat = "identity") + coord_flip()
+```
+
+
+```{r}
+pred <- predict(xg_train, as.matrix(train_set_xgb_noName_noFTR))
+pred_test <- predict(xg_train, as.matrix(test_set_xgb_noName_noFTR))
+train_prediction_list <- as.data.frame(pred)
+test_prediction_list <- as.data.frame(pred_test)
+
+train_prediction_list
+test_prediction_list
+
+test_set_xgb_noName$FTR
+```
+
+```{r}
+xgb_test_accuracy <- test_set_xgb_noName %>% mutate(pred_test = pred_test)
+xgb_test_accuracy<- xgb_test_accuracy %>% mutate(correct = ifelse(pred_test == FTR,1,0))
+xgb_accuracy <- sum(xgb_test_accuracy$correct) / length(xgb_test_accuracy$correct)
+```
+
+
+```{r}
+rf_accuracy
+xgb_accuracy
+```
+
+Avg Accuracy For 25 Different train/test sets using CHANGED variables!
+(el classico)
+minsplit = default
+minbucket = default
+Dim: [1] 45 19
+```{r}
+seed_num5 <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+list_rf_accuracy5 <- c(0.6363636, 0.2727273, 0.7272727, 0.4545455, 0.8181818, 0.6363636, 0.4545455, 0.4545455, 0.7272727, 0.6363636, 0.6363636, )
+
+list_xgb_accuracy5 <- c(0.7272727, 0.5454545, 0.6363636, 0.6363636, 0.5454545, 0.6363636, 0.4545455, 0.5454545, 0.5454545, 0.4545455, 0.6363636, )
+
+df_acc5 <- data.frame(seed_num5, list_rf_accuracy5, list_xgb_accuracy5) 
+rf_mean_acc5 <- mean(df_acc5$list_rf_accuracy5)
+xgb_mean_acc5 <- mean(df_acc5$list_xgb_accuracy5)
+
+rf_mean_acc5
+xgb_mean_acc5
+```
+
+
+Avg Accuracy For 25 Different train/test sets using ALL variables
+(el classico)
+minsplit = 6
+minbucket = 2
+Dim [1] 45 34
+```{r}
+seed_num1 <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+list_rf_accuracy1 <- c(0.6363636, 0.4545455, 0.6363636, 0.3636364, 0.5454545, 0.6363636,  0.3636364, 0.4545455, 0.5454545, 0.7272727, 0.7272727, 0.7272727, 0.5454545, 0.3636364, 0.6363636, 0.6363636, 0.5454545, 0.5454545, 0.5454545, 0.5454545, 0.6363636, 0.4545455, 0.7272727, 0.5454545, 0.3636364)
+
+list_xgb_accuracy1 <- c(0.9090909, 0.4545455, 0.7272727, 0.7272727, 0.5454545, 0.6363636, 0.6363636, 0.5454545, 0.6363636, 0.6363636, 0.6363636, 0.6363636, 0.5454545, 0.8181818, 0.7272727, 0.7272727, 0.7272727, 0.7272727, 0.8181818, 0.7272727, 0.7272727, 0.4545455, 0.6363636, 0.6363636, 0.3636364)
+
+df_acc1 <- data.frame(seed_num1, list_rf_accuracy1, list_xgb_accuracy1) 
+rf_mean_acc1 <- mean(df_acc1$list_rf_accuracy1)
+xgb_mean_acc1 <- mean(df_acc1$list_xgb_accuracy1)
+
+rf_mean_acc1
+xgb_mean_acc1
+```
+
+Avg Accuracy For 25 Different train/test sets using ALL variables
+(el classico)
+Default minsplit
+Default minbucket
+DIm: [1] 45 34
+```{r}
+seed_num4 <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+list_rf_accuracy4 <- c(0.5454545, 0.5454545, 0.6363636, 0.3636364, 0.5454545, 0.4545455, 0.4545455, 0.4545455, 0.2727273, 0.7272727, 0.7272727, 0.6363636, 0.4545455, 0.3636364, 0.3636364, 0.5454545, 0.3636364, 0.3636364, 0.4545455, 0.6363636, 0.5454545, 0.3636364, 0.5454545, 0.4545455, 0.5454545)
+
+list_xgb_accuracy4 <- c(0.9090909, 0.4545455, 0.7272727, 0.7272727, 0.5454545, 0.6363636, 0.6363636, 0.5454545, 0.6363636, 0.6363636, 0.6363636, 0.6363636, 0.5454545, 0.8181818, 0.7272727, 0.7272727, 0.7272727, 0.7272727, 0.8181818, 0.7272727, 0.7272727, 0.4545455, 0.6363636, 0.6363636, 0.3636364)
+
+df_acc4 <- data.frame(seed_num4, list_rf_accuracy4, list_xgb_accuracy4) 
+rf_mean_acc4 <- mean(df_acc4$list_rf_accuracy4)
+xgb_mean_acc4 <- mean(df_acc4$list_xgb_accuracy4)
+
+rf_mean_acc4
+xgb_mean_acc4
+```
+
+Avg Accuracy For 25 Different train/test sets using base variables
+(Hometeam == "Celta")
+minsplit = 6
+minbucket = 2
+Dim: [1] 184  19
+```{r}
+seed_num3 <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+list_rf_accuracy3 <- c(0.6956522, 0.6304348, .5869565, 0.5, 0.6956522, 0.5434783, 0.6521739, 0.5217391, 0.6521739, 0.5869565, 0.5869565, 0.6304348, 0.6304348, 0.6086957, 0.5217391, 0.4782609, 0.5434783, 0.6086957, 0.6521739, 0.6086957, 0.4782609, 0.5217391, 0.5869565, 0.5434783, 0.5434783)
+
+list_xgb_accuracy3 <- c(0.6304348, 0.6086957, 0.5217391, 0.5434783, 0.6086957, 0.5652174, 0.6304348, 0.5217391, 0.6956522, 0.4782609, 0.5, 0.5217391, 0.673913, 0.6086957, 0.4782609, 0.5, 0.5652174, 0.5434783, 0.5869565, 0.6521739, 0.5, 0.5619565, 0.5217391, 0.4130435, 0.4565217)
+
+df_acc3 <- data.frame(seed_num3, list_rf_accuracy3, list_xgb_accuracy3) 
+rf_mean_acc3 <- mean(df_acc3$list_rf_accuracy3)
+xgb_mean_acc3 <- mean(df_acc3$list_xgb_accuracy3)
+
+rf_mean_acc3
+xgb_mean_acc3
+```
+
+
+Avg Accuracy For 25 Different train/test sets using base variables
+(Hometeam == "Celta")
+Default minsplit
+Default minbucket
+Dim [1] 184  19
+```{r}
+seed_num2 <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+
+list_rf_accuracy2 <- c(0.7173913, 0.6086957, 0.5652174, 0.4782609, 0.7391304, 0.5, 0.5652174, 0.7173913, 0.6304348, 0.6086957, 0.5652174, 0.6304348, 0.6304348, 0.5869565, 0.5217391, 0.4130435, 0.5869565, 0.673913, 0.6086957, 0.6304348, 0.4782609, 0.5, 0.5652174, 0.5652174, 0.4782609)
+
+list_xgb_accuracy2 <- c(0.6304348, 0.6086957, 0.5217391, 0.5434783, 0.6086957, 0.5652174, 0.3913043, 0.6304348, 0.6956522, 0.4782609, 0.5, 0.5217391, 0.673913, 0.6086957, 0.4782609, 0.5, 0.5652174, 0.5434783, 0.5869565, 0.6521739, 0.5, 0.5652174, 0.5217391, 0.4130435, 0.4565217)
+
+df_acc2 <- data.frame(seed_num2, list_rf_accuracy2, list_xgb_accuracy2) 
+rf_mean_acc2 <- mean(df_acc2$list_rf_accuracy2)
+xgb_mean_acc2 <- mean(df_acc2$list_xgb_accuracy2)
+
+rf_mean_acc2
+xgb_mean_acc2
+```
+
