@@ -4,4 +4,4 @@ This repository houses the code and data used for my Senior Thesis, _Predicting 
 
 ## Data
 
-The offical dataset containing data from all competitive El Clásico matchups from 08-09 season up until the 21-22 season can be found as Copy_of_classico.csv in the data folder 
+The offical dataset containing data from all competitive El Clásico matchups from 08-09 season up until the 21-22 season is Copy_of_classico.csv in the data folder 
